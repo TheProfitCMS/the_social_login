@@ -13,7 +13,9 @@ module SocialNetworksLogin
       has_many :credentials, dependent: :destroy
 
       before_validation :set_oauth_params,   on: :create, if: ->{ oauth? }
-      before_validation :fakes_for_oauth,    on: :create, if: ->{ oauth? }
+      before_validation :define_login,       on: :create, if: ->{ oauth? }
+      before_validation :define_email,       on: :create, if: ->{ oauth? }
+      before_validation :define_password,    on: :create, if: ->{ oauth? }
       before_save       :skip_confirmation!, on: :create, if: ->{ oauth? }
 
       after_save :create_credential,   if: ->{ oauth? }
@@ -29,40 +31,37 @@ module SocialNetworksLogin
       end
 
       def default_email_domain
-        'open-cook.ru'
+        'my-web-site.com'
+      end
+
+      def attempts_to_generate
+        10
       end
 
       # do something common here
       def set_params_common_oauth
-        info = oauth_info
         self.username = info.try(:[], 'name')
       end
 
       # do something special here
       def set_params_from_gp_oauth
-        self.email   = oauth_info.try(:[], 'email')
-        self.gp_addr = oauth_info.try(:[], 'urls').try(:[], 'Google')
+        self.gp_addr = info.try(:[], 'urls').try(:[], 'Google')
       end
 
       def set_params_from_fb_oauth
-        self.email = oauth_info.try(:[], 'email')
-        self.fb_addr = oauth_info.try(:[], 'urls').try(:[], 'Facebook')
+        self.fb_addr = info.try(:[], 'urls').try(:[], 'Facebook')
       end
 
       def set_params_from_vk_oauth
-        info = oauth_info
-        self.login = info.try(:[], 'nickname')
-        self.vk_addr = oauth_info.try(:[], 'urls').try(:[], 'Vkontakte')
+        self.vk_addr = info.try(:[], 'urls').try(:[], 'Vkontakte')
       end
 
       def set_params_from_tw_oauth
-        info = oauth_info
-        self.login = info.try(:[], 'nickname')
-        self.tw_addr = oauth_info.try(:[], 'urls').try(:[], 'Twitter')
+        self.tw_addr = info.try(:[], 'urls').try(:[], 'Twitter')
       end
 
       def set_params_from_ok_oauth
-        self.ok_addr = oauth_info.try(:[], 'urls').try(:[], 'Odnoklassniki')
+        self.ok_addr = info.try(:[], 'urls').try(:[], 'Odnoklassniki')
       end
 
       def create_credential_with_oauth(uid, provider, _credentials)
@@ -89,26 +88,38 @@ module SocialNetworksLogin
       def update_social_networks_urls! omniauth
         info = omniauth.try(:[], 'info')
 
-        self.gp_addr = info.try(:[], 'urls').try(:[], 'Google')        if gp_addr.blank?
-        self.fb_addr = info.try(:[], 'urls').try(:[], 'Facebook')      if fb_addr.blank?
-        self.vk_addr = info.try(:[], 'urls').try(:[], 'Vkontakte')     if vk_addr.blank?
-        self.tw_addr = info.try(:[], 'urls').try(:[], 'Twitter')       if tw_addr.blank?
-        self.ok_addr = info.try(:[], 'urls').try(:[], 'Odnoklassniki') if ok_addr.blank?
+        self.gp_addr = info.try(:[], 'urls').try(:[], 'Google')        if self.gp_addr.blank?
+        self.fb_addr = info.try(:[], 'urls').try(:[], 'Facebook')      if self.fb_addr.blank?
+        self.vk_addr = info.try(:[], 'urls').try(:[], 'Vkontakte')     if self.vk_addr.blank?
+        self.tw_addr = info.try(:[], 'urls').try(:[], 'Twitter')       if self.tw_addr.blank?
+        self.ok_addr = info.try(:[], 'urls').try(:[], 'Odnoklassniki') if self.ok_addr.blank?
 
         self.save
       end
 
       private
 
-      def oauth_info
-        oauth_params.try(:[], 'info')
-      end
+      # OAUTH helpers
 
       def oauth?; !oauth_data.blank?; end
 
       def oauth_params
         @oauth_params ||= (begin; JSON.parse oauth_data; rescue; nil; end)
       end
+
+      def info
+        @info ||= oauth_params.try(:[], 'info')
+      end
+
+      def extra
+        @extra ||= oauth_params.try(:[], 'extra')
+      end
+
+      def raw_info
+        @raw_info ||= oauth_params.try(:[], 'extra').try(:[], 'raw_info')
+      end
+
+      # base methods
 
       SocialNetworksLogin::Base.networks_list.each do |network_name|
         define_method "#{ network_name }_oauth?" do
@@ -124,20 +135,60 @@ module SocialNetworksLogin
         create_credential_with_oauth(uid, provider, _credentials)
       end
 
-      def fakes_for_oauth
-        _email = "#{ SecureRandom.hex[0..6] }@#{ default_email_domain }"
-        _login = "user-#{ SecureRandom.hex[0..4] }"
+      def define_login
+        # generate by oauth data
+        self.login = info.try(:[], 'nickname')        if self.login.blank?
+        self.login = raw_info.try(:[], 'screen_name') if self.login.blank?
 
-        self.email    = self.email.blank? ? _email : self.email
-        self.login    = self.login.blank? ? _login : self.login
+        # generate by username with number
+        if self.login.blank? && self.username.present?
+          login_counter = 0
+          _login = self.username.to_slug_param
+
+          while User.find_by_login(_login) do
+            login_counter += 1
+            _login = [ self.username.to_slug_param, login_counter ].join ?-
+            _login = nil && break if login_counter == attempts_to_generate
+          end
+
+          self.login = _login
+        end
+
+        # generate by random value
+        if self.login.blank?
+          self.login = "user-#{ SecureRandom.hex[0..4] }"
+        end
+      end
+
+      def define_email
+        # generate by oauth data
+        self.email = info.try(:[], 'email') if self.email.blank?
+
+        # generate by login with number
+        if self.email.blank? && self.login.present?
+          email_counter = 0
+          _email = [ self.login, default_email_domain ].join ?@
+
+          while User.find_by_email(_email) do
+            email_counter += 1
+            _email = [ "#{ self.login }-#{ email_counter }", default_email_domain ].join ?@
+            _email = nil && break if email_counter == attempts_to_generate
+          end
+
+          self.email = _email
+        end
+
+        # generate by random value
+        if self.email.blank?
+          self.email = "#{ SecureRandom.hex[0..6] }@#{ default_email_domain }"
+        end
+      end
+
+      def define_password
         self.password = SecureRandom.hex[0..10]
       end
 
       def upload_oauth_avatar
-        info     = oauth_info
-        extra    = oauth_params.try(:[], 'extra')
-        raw_info = extra.try(:[], 'raw_info')
-
         default_image = info.try(:[], 'image')
         gp_avatar, fb_avatar, tw_avatar = Array.new(3, default_image)
 
