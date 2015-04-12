@@ -26,6 +26,16 @@ module SocialNetworksLogin
           ok: :Odnoklassniki
         }
       end
+
+      def social_networks_hash2
+        {
+          gp: :google_oauth2,
+          fb: :facebook,
+          vk: :vkontakte,
+          tw: :twitter,
+          ok: :odnoklassniki
+        }
+      end
     end # class_methods
 
     included do
@@ -111,7 +121,7 @@ module SocialNetworksLogin
 
       def oauth_set_social_network_url
         ::User.social_networks_hash.each_pair do |key, name|
-          if self.methods.include?("#{ key }_addr=")
+          if self.methods.include?(:"#{ key }_addr=")
             # EXAMPLE: self.try 'gp_addr=', info.try(:[], 'urls').try(:[], 'Google')
             self.try "#{ key }_addr=", info.try(:[], 'urls').try(:[], name.to_s)
           else
@@ -126,10 +136,10 @@ module SocialNetworksLogin
 
       def oauth?; oauth_data.present?; end
 
-      ::User.networks_list.each do |network_name|
+      ::User.social_networks_hash2.each_pair do |k, name|
         # EXAMPLE: def og_oauth?; oauth_params['provider'] == 'facebook'; end
-        define_method "#{ network_name }_oauth?" do
-          oauth_params['provider'] == network_name
+        define_method "#{ k }_oauth?" do
+          oauth_params['provider'] == name.to_s
         end
       end
 
@@ -157,24 +167,24 @@ module SocialNetworksLogin
         avatar = info.try(:[], 'image')
         gp_avatar, fb_avatar, tw_avatar = Array.new(3, avatar)
 
-        if facebook_oauth?
+        if fb_oauth?
           json   = JSON.parse(Net::HTTP.get(URI.parse(fb_avatar.gsub('&redirect=false', '') + '?type=large&redirect=false')))
           avatar = json['data']['url'] unless json['data']['is_silhouette']
         end
 
-        if twitter_oauth?
+        if tw_oauth?
           avatar = tw_avatar.gsub('_normal', '')
         end
 
-        if vkontakte_oauth?
+        if vk_oauth?
           avatar = raw_info.try(:[], 'photo_200_orig')
         end
 
-        if google_oauth2_oauth?
+        if gp_oauth?
           avatar = gp_avatar.gsub('s50', 's200').gsub('sz=50', 'sz=200')
         end
 
-        if odnoklassniki_oauth?
+        if ok_oauth?
           avatar = raw_info.try(:[], 'pic_2')
         end
 
